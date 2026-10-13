@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+mygopen_articles.csv
+test_mygopen_crawler-0912.py

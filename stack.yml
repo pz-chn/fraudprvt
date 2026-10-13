@@ -1,0 +1,84 @@
+version: "3.8"
+services:
+  api:
+    image: fraudprvt_api:local
+    command: uv run uvicorn api.main:app --host 0.0.0.0 --port 8888
+    ports:
+      - "8889:8888"
+    environment:
+      TZ: Asia/Taipei
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_ACCOUNT: ${MYSQL_ACCOUNT}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_ACCOUNT}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+  # rabbitmq 只給 stack 內部的 crawler 用 (服務名稱 rabbitmq:5672)。
+  # 5672 (程式連線用) 不發佈, 不會暴露到主機外;
+  # 15672 是管理介面, 本機測試時發佈, 上雲後靠防火牆(只開 80/443)擋住, 需要時用 SSH 通道存取
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "15673:15672"
+    environment:
+      # 預設帳密就是 crawler 連 broker 用的 WORKER_ACCOUNT / WORKER_PASSWORD
+      RABBITMQ_DEFAULT_USER: ${WORKER_ACCOUNT}
+      RABBITMQ_DEFAULT_PASS: ${WORKER_PASSWORD}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+  crawler_worker:
+    image: fraudprvt_crawler:local
+    environment:
+      WORKER_ACCOUNT: ${WORKER_ACCOUNT}
+      WORKER_PASSWORD: ${WORKER_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_ACCOUNT: ${MYSQL_ACCOUNT}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+  crawler_beat:
+    image: fraudprvt_crawler:local
+    command: uv run celery -A crawler.worker beat --loglevel=info -s /tmp/celerybeat-schedule
+    environment:
+      WORKER_ACCOUNT: ${WORKER_ACCOUNT}
+      WORKER_PASSWORD: ${WORKER_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_ACCOUNT: ${MYSQL_ACCOUNT}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    deploy:
+      # beat 只負責「到點派工」, 每一份 beat 都會各自派一次; 開 2 份就會每天重複爬兩次
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+volumes:
+  mysql_data:
