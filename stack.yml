@@ -1,4 +1,5 @@
 version: "3.8"
+# restart_policy: 常駐服務用 any, Docker 正常重啟後也會自動回來; 一次性任務才用 on-failure
 services:
   api:
     image: fraudprvt_api:local
@@ -9,15 +10,15 @@ services:
       TZ: Asia/Taipei
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
-      MYSQL_ACCOUNT: ${MYSQL_ACCOUNT}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ACCOUNT: ${API_DB_ACCOUNT}
+      MYSQL_PASSWORD: ${API_DB_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
       LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        condition: any
   mysql:
     image: mysql:8.0
     environment:
@@ -30,7 +31,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        condition: any
   # rabbitmq 只給 stack 內部的 crawler 用 (服務名稱 rabbitmq:5672)。
   # 5672 (程式連線用) 不發佈, 不會暴露到主機外;
   # 15672 是管理介面, 本機測試時發佈, 上雲後靠防火牆(只開 80/443)擋住, 需要時用 SSH 通道存取
@@ -45,7 +46,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        condition: any
   crawler_worker:
     image: fraudprvt_crawler:local
     environment:
@@ -55,30 +56,130 @@ services:
       RABBITMQ_PORT: "5672"
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
-      MYSQL_ACCOUNT: ${MYSQL_ACCOUNT}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ACCOUNT: ${CRAWLER_DB_ACCOUNT}
+      MYSQL_PASSWORD: ${CRAWLER_DB_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
-  crawler_beat:
-    image: fraudprvt_crawler:local
-    command: uv run celery -A crawler.worker beat --loglevel=info -s /tmp/celerybeat-schedule
+        condition: any
+  # ---------------------------------------------------------------
+  # Airflow (CeleryExecutor): scheduler 派工、airflow_worker 執行、airflow-redis 當 Airflow 內部 broker
+  # Airflow 的 Redis 與專題的 RabbitMQ 是兩套:
+  #   - airflow-redis 只傳 Airflow 自己的任務 (DAG 裡的 PythonOperator 給 airflow_worker 執行)
+  #   - rabbitmq 傳 crawler 的任務 (crawler_worker 監聽預設 queue「celery」)
+  #   兩邊都是 Celery, 若共用同一個 broker, 雙方的 worker 會互相搶到對方的任務
+  # DAG 只是在 airflow_worker 上用 CRAWLER_BROKER_URL 把任務送進 rabbitmq, 真正爬資料的仍是 crawler_worker
+  # ---------------------------------------------------------------
+
+  # Airflow 內部的 Celery broker 與 result backend; 不開 ports, 只給 stack 內的 Airflow 服務用
+  # 服務名稱用連字號: 底線不是合法的主機名稱字元, 放進 redis:// 網址可能解析失敗
+  airflow-redis:
+    image: redis:7
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  # 一次性任務: migrate Airflow metadata DB, 再建立 admin 使用者
+  # 使用者已存在時 users create 會失敗, 此時只要確認使用者真的在, 就當作成功
+  # $$ 是讓 docker stack deploy 不展開, 留到容器內的 bash 才讀環境變數
+  airflow_init:
+    image: fraudprvt_airflow:local
+    command:
+      - bash
+      - -c
+      - >-
+        set -e;
+        airflow db migrate;
+        airflow users create --username "$$AIRFLOW_ADMIN_USER" --password "$$AIRFLOW_ADMIN_PASSWORD"
+        --firstname admin --lastname admin --role Admin --email admin@example.invalid
+        || airflow users list -o plain | grep -qw -- "$$AIRFLOW_ADMIN_USER"
     environment:
-      WORKER_ACCOUNT: ${WORKER_ACCOUNT}
-      WORKER_PASSWORD: ${WORKER_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: "5672"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_ACCOUNT: ${MYSQL_ACCOUNT}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${AIRFLOW_DB_ACCOUNT}:${AIRFLOW_DB_PASSWORD}@mysql:3306/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: redis://airflow-redis:6379/1
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      # scheduler / worker / webserver 必須用同一把 secret key:
+      # 網頁是向 worker 取任務 log, worker 用這把 key 驗證請求, key 不同就看不到 log
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
     deploy:
-      # beat 只負責「到點派工」, 每一份 beat 都會各自派一次; 開 2 份就會每天重複爬兩次
       replicas: 1
+      # MySQL 可能還沒就緒, 失敗就隔 15 秒重試, 最多 10 次; 成功結束 (exit 0) 就不再重啟
       restart_policy:
         condition: on-failure
+        delay: 15s
+        max_attempts: 10
+
+  # 依 DAG 排程把 Airflow 任務放進 airflow-redis
+  airflow_scheduler:
+    image: fraudprvt_airflow:local
+    command: ["bash", "-c", "airflow db check-migrations --migration-wait-timeout 300 && exec airflow scheduler"]
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${AIRFLOW_DB_ACCOUNT}:${AIRFLOW_DB_PASSWORD}@mysql:3306/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: redis://airflow-redis:6379/1
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      # scheduler / worker / webserver 必須用同一把 secret key:
+      # 網頁是向 worker 取任務 log, worker 用這把 key 驗證請求, key 不同就看不到 log
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  # 從 airflow-redis 取出 Airflow 任務並執行 (例如 crawler_producer.py 的 send_task)
+  airflow_worker:
+    image: fraudprvt_airflow:local
+    command: ["bash", "-c", "airflow db check-migrations --migration-wait-timeout 300 && exec airflow celery worker"]
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${AIRFLOW_DB_ACCOUNT}:${AIRFLOW_DB_PASSWORD}@mysql:3306/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: redis://airflow-redis:6379/1
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      # scheduler / worker / webserver 必須用同一把 secret key:
+      # 網頁是向 worker 取任務 log, worker 用這把 key 驗證請求, key 不同就看不到 log
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+      # 預設同時跑 16 個任務、各佔一個 process, 太吃記憶體; 這裡的 DAG 只是送訊息, 2 個就夠
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: "2"
+      # DAG 送 crawler 任務用的 RabbitMQ 網址, 組法與 crawler/worker.py 的 broker 相同
+      CRAWLER_BROKER_URL: pyamqp://${WORKER_ACCOUNT}:${WORKER_PASSWORD}@rabbitmq:5672/
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  # Airflow 網頁介面, 對外 8082
+  airflow_webserver:
+    image: fraudprvt_airflow:local
+    command: ["bash", "-c", "airflow db check-migrations --migration-wait-timeout 300 && exec airflow webserver"]
+    ports:
+      - "8082:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${AIRFLOW_DB_ACCOUNT}:${AIRFLOW_DB_PASSWORD}@mysql:3306/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: redis://airflow-redis:6379/1
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      # scheduler / worker / webserver 必須用同一把 secret key:
+      # 網頁是向 worker 取任務 log, worker 用這把 key 驗證請求, key 不同就看不到 log
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
 volumes:
   mysql_data:
