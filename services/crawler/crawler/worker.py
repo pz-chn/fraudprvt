@@ -31,7 +31,7 @@ app = Celery(
     include=[
         "crawler.tasks",  # mygopen 文章爬蟲
         "crawler.tasks_165",  # 165 打詐儀錶板案例摘要爬蟲
-        "crawler.tasks_schedule",  # 給 beat 定時觸發的派工任務
+        "crawler.tasks_schedule",  # 給 Airflow 定時觸發的派工任務
     ],
     # broker: 指定訊息中介的連線網址, Celery 會把任務送到這裡排隊
     # 格式: pyamqp://帳號:密碼@主機:埠號/
