@@ -1,0 +1,7 @@
+# **/ 前綴是為了讓子目錄也被排除（沒有前綴只比對 build context 根目錄）
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+**/.env
+**/.env.*
+**/*.ini

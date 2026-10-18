@@ -2,7 +2,6 @@
 # Celery 是分散式任務佇列 (Distributed Task Queue)
 # 可以把耗時的工作丟到背景 worker 執行, 不會卡住主程式
 from celery import Celery
-from celery.schedules import crontab
 
 # loguru 是比標準 logging 更好用的日誌套件, 不用繁瑣設定就能直接用
 from loguru import logger
@@ -40,18 +39,5 @@ app = Celery(
     broker=f"pyamqp://{WORKER_ACCOUNT}:{WORKER_PASSWORD}@{RABBITMQ_HOST}:{RABBITMQ_PORT}/",
 )
 
-# beat 的排程用台北時間解讀, 否則 crontab 的 hour 會被當成 UTC
+# Celery 內部時間用台北時區
 app.conf.timezone = "Asia/Taipei"
-
-# Celery Beat 每天定時派工; 需要另外啟動 celery beat 這個 process 才會生效
-app.conf.beat_schedule = {
-    "crawl-mygopen-daily": {
-        "task": "crawler.tasks_schedule.crawl_mygopen",
-        "schedule": crontab(hour=3, minute=0),
-    },
-    "crawl-165-recent-daily": {
-        "task": "crawler.tasks_schedule.crawl_165_recent",
-        "schedule": crontab(hour=3, minute=30),
-        "args": (3,),
-    },
-}
