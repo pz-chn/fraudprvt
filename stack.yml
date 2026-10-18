@@ -24,10 +24,18 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_ACCOUNT}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      # 以下給 db/init-users.sh 建立各服務專用帳號用
+      API_DB_ACCOUNT: ${API_DB_ACCOUNT}
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+      CRAWLER_DB_ACCOUNT: ${CRAWLER_DB_ACCOUNT}
+      CRAWLER_DB_PASSWORD: ${CRAWLER_DB_PASSWORD}
+      AIRFLOW_DB_ACCOUNT: ${AIRFLOW_DB_ACCOUNT}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
+      # initdb.d 內的檔案依檔名排序執行: 01 先建表, 02 再授權 (GRANT 需要資料表已存在)
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/init-users.sh:/docker-entrypoint-initdb.d/02_init-users.sh:ro
     deploy:
       replicas: 1
       restart_policy:

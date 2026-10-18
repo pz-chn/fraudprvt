@@ -65,9 +65,10 @@ docker swarm init                    # 若尚未啟用 Swarm
 set -a; source .env.stack; source .env.line; set +a
 docker stack deploy --resolve-image never -c stack.yml fraudprvt
 
-# 4. 建立資料表（目前需手動執行，之後會改為自動）
-docker exec -i $(docker ps -q -f name=fraudprvt_mysql) \
-  sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot fraudprvt' < db/schema.sql
+# 4. 資料表與資料庫帳號：全新環境不需手動處理
+#    MySQL 第一次啟動、資料目錄為空時，會自動執行 db/schema.sql（建立資料表）
+#    與 db/init-users.sh（建立專用帳號與 airflow 資料庫）。
+#    若資料目錄已存在（例如以前啟動過），初始化不會再執行，請見下方「注意事項」。
 
 # 5. 開啟 Airflow（http://localhost:8082，帳號為 .env.stack 的 AIRFLOW_ADMIN_USER）
 #    把 crawler_crawl_mygopen 與 crawler_crawl_165_recent 兩個 DAG 的開關打開。
@@ -77,7 +78,13 @@ docker exec $(docker ps -q -f name=fraudprvt_crawler_worker) \
   uv run celery -A crawler.worker call crawler.tasks_schedule.crawl_mygopen
 ```
 
-注意：資料庫專用帳號（API 唯讀、爬蟲可寫、Airflow）與 `airflow` 資料庫目前需要手動建立，之後會以 `db/init-users.sh` 自動化（進行中）；以上步驟也尚未用乾淨的 clone 完整驗證過一遍。
+資料庫專用帳號（api、crawler、airflow）與 `airflow` 資料庫，會在 MySQL 第一次啟動、資料目錄為空時，由 `db/init-users.sh` 依 `.env.stack` 的變數（`API_DB_ACCOUNT`／`API_DB_PASSWORD`、`CRAWLER_DB_ACCOUNT`／`CRAWLER_DB_PASSWORD`、`AIRFLOW_DB_ACCOUNT`／`AIRFLOW_DB_PASSWORD`）自動建立；資料表結構由 `db/schema.sql` 自動建立。以上步驟尚未用乾淨的 clone 完整驗證過一遍。
+
+### 注意事項
+
+1. 初始化腳本（`/docker-entrypoint-initdb.d/`）只在 MySQL 資料目錄為空時執行一次，對已有資料的資料庫沒有作用。
+2. 新增資料表時，要同時做兩件事：在 `db/init-users.sh` 補上對應的 `GRANT`（讓新環境正確），並在現有資料庫手動執行同樣的 `GRANT`（讓現有環境正確）。
+3. 各帳號權限採「預設拒絕」：新資料表預設沒有任何帳號能使用，必須明確授權。
 
 ## 本機測試 LINE（ngrok）
 
@@ -111,6 +118,7 @@ ngrok http --url=<你的固定網域> 8889
 fraudprvt/
 ├── stack.yml                 # Swarm stack：所有服務的定義
 ├── db/schema.sql             # 資料表結構
+├── db/init-users.sh          # MySQL 首次初始化時建立專用帳號與 airflow 資料庫
 ├── .env.stack.example        # 部署用環境變數欄位（只有欄位名稱）
 └── services/
     ├── airflow/              # Airflow（Dockerfile、dags/）
