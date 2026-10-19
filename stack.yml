@@ -2,7 +2,7 @@ version: "3.8"
 # restart_policy: 常駐服務用 any, Docker 正常重啟後也會自動回來; 一次性任務才用 on-failure
 services:
   api:
-    image: fraudprvt_api:local
+    image: kikurage3133/fraudprvt_api:0.1.0
     command: uv run uvicorn api.main:app --host 0.0.0.0 --port 8888
     ports:
       - "8889:8888"
@@ -56,7 +56,7 @@ services:
       restart_policy:
         condition: any
   crawler_worker:
-    image: fraudprvt_crawler:local
+    image: kikurage3133/fraudprvt_crawler:0.1.0
     environment:
       WORKER_ACCOUNT: ${WORKER_ACCOUNT}
       WORKER_PASSWORD: ${WORKER_PASSWORD}
@@ -93,7 +93,7 @@ services:
   # 使用者已存在時 users create 會失敗, 此時只要確認使用者真的在, 就當作成功
   # $$ 是讓 docker stack deploy 不展開, 留到容器內的 bash 才讀環境變數
   airflow_init:
-    image: fraudprvt_airflow:local
+    image: kikurage3133/fraudprvt_airflow:0.1.0
     command:
       - bash
       - -c
@@ -126,7 +126,7 @@ services:
 
   # 依 DAG 排程把 Airflow 任務放進 airflow-redis
   airflow_scheduler:
-    image: fraudprvt_airflow:local
+    image: kikurage3133/fraudprvt_airflow:0.1.0
     command: ["bash", "-c", "airflow db check-migrations --migration-wait-timeout 300 && exec airflow scheduler"]
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -146,7 +146,7 @@ services:
 
   # 從 airflow-redis 取出 Airflow 任務並執行 (例如 crawler_producer.py 的 send_task)
   airflow_worker:
-    image: fraudprvt_airflow:local
+    image: kikurage3133/fraudprvt_airflow:0.1.0
     command: ["bash", "-c", "airflow db check-migrations --migration-wait-timeout 300 && exec airflow celery worker"]
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -170,7 +170,7 @@ services:
 
   # Airflow 網頁介面, 對外 8082
   airflow_webserver:
-    image: fraudprvt_airflow:local
+    image: kikurage3133/fraudprvt_airflow:0.1.0
     command: ["bash", "-c", "airflow db check-migrations --migration-wait-timeout 300 && exec airflow webserver"]
     ports:
       - "8082:8080"

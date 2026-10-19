@@ -55,22 +55,19 @@ cd fraudprvt
 cp .env.stack.example .env.stack     # 依欄位填寫（包含 Airflow 管理員密碼，請用隨機字串）
 cp .env.line.example .env.line     # 填入 LINE 的 Channel secret 與 access token（不進 git）
 
-# 2. 建置 image
-docker build -t fraudprvt_api:local services/api
-docker build -t fraudprvt_crawler:local services/crawler
-docker build -t fraudprvt_airflow:local services/airflow
-
-# 3. 部署
+# 2. 部署
+#    image 由 Docker Hub 公開下載（kikurage3133/fraudprvt_api、fraudprvt_crawler、fraudprvt_airflow，
+#    支援 amd64 與 arm64），使用的版本標籤寫在 stack.yml 裡，不需要在本機 build。
 docker swarm init                    # 若尚未啟用 Swarm
 set -a; source .env.stack; source .env.line; set +a
-docker stack deploy --resolve-image never -c stack.yml fraudprvt
+docker stack deploy -c stack.yml fraudprvt
 
-# 4. 資料表與資料庫帳號：全新環境不需手動處理
+# 3. 資料表與資料庫帳號：全新環境不需手動處理
 #    MySQL 第一次啟動、資料目錄為空時，會自動執行 db/schema.sql（建立資料表）
 #    與 db/init-users.sh（建立專用帳號與 airflow 資料庫）。
 #    若資料目錄已存在（例如以前啟動過），初始化不會再執行，請見下方「注意事項」。
 
-# 5. 開啟 Airflow（http://localhost:8082，帳號為 .env.stack 的 AIRFLOW_ADMIN_USER）
+# 4. 開啟 Airflow（http://localhost:8082，帳號為 .env.stack 的 AIRFLOW_ADMIN_USER）
 #    把 crawler_crawl_mygopen 與 crawler_crawl_165_recent 兩個 DAG 的開關打開。
 #    打開時會立刻補跑一次，之後每天自動執行。
 #    也可以用下列指令手動觸發一次爬取：
