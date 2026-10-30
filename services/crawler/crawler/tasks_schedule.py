@@ -1,12 +1,12 @@
 # tasks_schedule
-# 給 Celery Beat 定時觸發的派工任務
-# 本身不抓資料, 只是把 producer 手動做的事改成由 beat 每天自動做一次
-from crawler.worker import app
+# airflow 定時觸發的派工任務
+# 本身不抓資料，給出更多紙條
+from crawler.worker import app # 從worker.py拿出app
 
-from crawler import producer, producer_165
+from crawler import producer, producer_165 # 讀producer.py和producer_165.py
 
 
-@app.task()
+@app.task() # 把以下函式登記進app名冊 名字是crawler.tasks_schedule.crawl_mygopen 對應到dags傳來的紙條
 def crawl_mygopen():
     # 與手動執行 producer.py 相同: 派送 page 0 ~ 4 的 fetch_page
     producer.dispatch_pages()
