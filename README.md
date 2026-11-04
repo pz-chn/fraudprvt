@@ -1,7 +1,7 @@
 # 詐騙文章查詢 LINE Bot （建置中）
 
 平時多看詐騙案例有助避免被騙～
-收集 MyGoPen 的查核文章，與臺灣內政部警政署的各縣市每日案例，存進 MySQL；提供以關鍵字查詢查核文章的功能。另外，收集臺灣獲 IFCN 認證的 Taiwan FactCheck Center（台灣事實查核中心）的查核文章（規劃中），以及每天主動傳送一則「每日案例」給使用者（規劃中）。
+收集 MyGoPen 的查核文章，與臺灣內政部警政署的各縣市每日案例，存進 MySQL；提供以關鍵字查詢查核文章的功能。另外，收集臺灣獲 IFCN 認證的 Taiwan FactCheck Center（台灣事實查核中心）的查核報告（建置中），以及每天主動傳送一則「每日案例」給使用者（規劃中）。
 
 > 目前狀態：資料收集與每日自動更新（由 Airflow 排程）已在本機 Docker Swarm 上運作；LINE 串接已在本機透過 ngrok 驗證可收發訊息；雲端部署尚在進行。
 
@@ -9,6 +9,7 @@
 
 - 每天自動爬取 MyGoPen 最新查核文章，存入 `mygopen_articles`（含分類 `article_categories`）。
 - 每天自動增量更新內政部警政署的各縣市每日案例，存入 `fraud_cases`（目前 API 尚未使用）。
+- 每天自動更新台灣事實查核中心的查核報告，存入 `tfc_articles`（含報告類型 `tfc_article_categories`；目前 API 尚未使用）。
 - FastAPI 提供查詢介面，並以 LINE webhook 讓使用者在 LINE 傳關鍵字查詢（已在本機以 ngrok 驗證，尚未部署到雲端）。
 - 截至 2026-10-16：`mygopen_articles` 162 筆、`fraud_cases` 200,387 筆。
 
@@ -16,6 +17,7 @@
 
 - MyGoPen 查核文章。
 - 內政部警政署的各縣市每日案例。
+- 台灣事實查核中心的查核報告（[著作權聲明](https://tfc-taiwan.org.tw/copyright-notice/)：非營利目的可轉載分享，須維持原意並註明來源）。
 - 資料與文章內容的權利屬各來源網站，本專案為學習用途。
 
 ## 架構與資料流
@@ -39,7 +41,7 @@ flowchart LR
 
 資料庫帳號依用途分開：API 只有讀取權限，爬蟲帳號只能寫入爬蟲負責的資料表；帳號名稱由 `.env.stack` 設定。
 
-Airflow 以兩個 DAG 每天送出任務（時區 Asia/Taipei：03:00 MyGoPen、03:30 警政署案例）。
+Airflow 以三個 DAG 每天送出任務（時區 Asia/Taipei：03:00 MyGoPen 與台灣事實查核中心、03:30 警政署案例）。
 Airflow 自己的中繼資料存在同一個 MySQL 的 `airflow` 資料庫；它內部另有一個 Redis，
 與負責爬蟲任務的 RabbitMQ 是兩套各自獨立的佇列。
 
@@ -68,11 +70,16 @@ docker stack deploy -c stack.yml fraudprvt
 #    若資料目錄已存在（例如以前啟動過），初始化不會再執行，請見下方「注意事項」。
 
 # 4. 開啟 Airflow（http://localhost:8082，帳號為 .env.stack 的 AIRFLOW_ADMIN_USER）
-#    把 crawler_crawl_mygopen 與 crawler_crawl_165_recent 兩個 DAG 的開關打開。
+#    把 crawler_crawl_mygopen、crawler_crawl_tfc_recent 與 crawler_crawl_165_recent 三個 DAG 的開關打開。
 #    打開時會立刻補跑一次，之後每天自動執行。
 #    也可以用下列指令手動觸發一次爬取：
 docker exec $(docker ps -q -f name=fraudprvt_crawler_worker) \
   uv run celery -A crawler.worker call crawler.tasks_schedule.crawl_mygopen
+
+# 5. 第一次部署時全量抓取（每天的排程只抓最新的幾頁）
+docker exec $(docker ps -q -f name=fraudprvt_crawler_worker) uv run python -m crawler.producer all   # MyGoPen 全部頁
+docker exec $(docker ps -q -f name=fraudprvt_crawler_worker) uv run python -m crawler.producer_tfc   # 台灣事實查核中心全部頁
+docker exec $(docker ps -q -f name=fraudprvt_crawler_worker) uv run python -m crawler.producer_165   # 警政署案例全部頁
 ```
 
 資料庫專用帳號（api、crawler、airflow）與 `airflow` 資料庫，會在 MySQL 第一次啟動、資料目錄為空時，由 `db/init-users.sh` 依 `.env.stack` 的變數（`API_DB_ACCOUNT`／`API_DB_PASSWORD`、`CRAWLER_DB_ACCOUNT`／`CRAWLER_DB_PASSWORD`、`AIRFLOW_DB_ACCOUNT`／`AIRFLOW_DB_PASSWORD`）自動建立；資料表結構由 `db/schema.sql` 自動建立。以上步驟尚未用乾淨的 clone 完整驗證過一遍。
@@ -82,6 +89,7 @@ docker exec $(docker ps -q -f name=fraudprvt_crawler_worker) \
 1. 初始化腳本（`/docker-entrypoint-initdb.d/`）只在 MySQL 資料目錄為空時執行一次，對已有資料的資料庫沒有作用。
 2. 新增資料表時，要同時做兩件事：在 `db/init-users.sh` 補上對應的 `GRANT`（讓新環境正確），並在現有資料庫手動執行同樣的 `GRANT`（讓現有環境正確）。
 3. 各帳號權限採「預設拒絕」：新資料表預設沒有任何帳號能使用，必須明確授權。
+4. 在加入台灣事實查核中心之前就已初始化的資料庫，要手動建立 `tfc_articles`、`tfc_article_categories` 並補上 `GRANT`，指令寫在 `services/crawler/migrations/004_create_tfc_articles.sql` 的開頭註解。
 
 ## 本機測試 LINE（ngrok）
 

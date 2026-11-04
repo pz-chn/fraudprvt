@@ -3,6 +3,7 @@
 # 所有的 task 都要透過 app 來註冊, 才能被 Celery worker 識別
 from crawler.worker import app
 
+import math
 import re # 正規表達式(regular expression) 用規則從文字裡找東西
 from datetime import datetime, timedelta, timezone # datetime時間點 timedelta一段時間長度 timezone時區
 
@@ -74,6 +75,15 @@ def parse_published(value):
         published = published.astimezone(TAIPEI_TZ).replace(tzinfo=None) # astimezone(taipei_tz)換成台北時區 replace(tzinfo=none)把時區資訊拿掉 2026-08-22 11:00:53.497
     # DATETIME 只存到秒；MySQL 會四捨五入，所以這裡自己先把毫秒捨去，以免 MySQL 四捨五入後與 migration 的回填值差一秒
     return published.replace(microsecond=0)
+
+
+def get_total_pages():
+    # 只要 1 篇, 用來讀 RSS 的 openSearch:totalResults (全站文章總數)
+    feed = feedparser.parse(f"{BASE_URL}?start-index=1&max-results=1")
+    total = int(feed.feed.opensearch_totalresults)
+    total_pages = math.ceil(total / MAX_RESULTS)
+    logger.info(f"MyGoPen 共 {total} 篇, 以 {MAX_RESULTS} 篇/頁 分成 {total_pages} 頁")
+    return total_pages
 
 
 def get_engine():

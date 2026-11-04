@@ -72,3 +72,21 @@ with DAG(
         python_callable=send_crawler_task,
         op_kwargs={"task_name": "crawler.tasks_schedule.crawl_165_recent", "args": [3]},
     )
+
+
+# 03:00 派工抓取台灣事實查核中心 (TFC) 依修改時間排序的前 3 頁 (args=(3,))
+# 與 MyGoPen 同時送出, crawler_worker 會從同一個 queue 輪流處理
+with DAG(
+    dag_id="crawler_crawl_tfc_recent",
+    schedule="0 3 * * *",
+    start_date=pendulum.datetime(2026, 10, 1, tz=TAIPEI_TZ),
+    catchup=False,
+    max_active_runs=1,
+    default_args=default_args,
+    tags=["crawler"],
+):
+    PythonOperator(
+        task_id="send_crawl_tfc_recent",
+        python_callable=send_crawler_task,
+        op_kwargs={"task_name": "crawler.tasks_schedule.crawl_tfc_recent", "args": [3]},
+    )
