@@ -67,6 +67,8 @@ services:
       MYSQL_ACCOUNT: ${CRAWLER_DB_ACCOUNT}
       MYSQL_PASSWORD: ${CRAWLER_DB_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      # 每天 19:00 推播 165 案例 (crawler/tasks_line.py) 用; 來自 .env.line
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
     deploy:
       replicas: 1
       restart_policy:

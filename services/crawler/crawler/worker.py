@@ -1,10 +1,10 @@
 # worker
 # Celery 是分散式任務佇列 (Distributed Task Queue)
 # 可以把耗時的工作丟到背景 worker 執行, 不會卡住主程式
-from celery import Celery
+from celery import Celery # 建立@app名冊用
 
 # loguru 是比標準 logging 更好用的日誌套件, 不用繁瑣設定就能直接用
-from loguru import logger
+from loguru import logger # 印出log用 會印出和docker service logs一樣的內容
 
 # 從 config.py 讀取 RabbitMQ 連線資訊
 # RabbitMQ 是訊息中介 (message broker), Celery 透過它派送任務給 worker
@@ -32,7 +32,8 @@ app = Celery(
         "crawler.tasks",  # mygopen 文章爬蟲
         "crawler.tasks_165",  # 165 打詐儀錶板案例摘要爬蟲
         "crawler.tasks_tfc",  # 台灣事實查核中心查核報告爬蟲
-        "crawler.tasks_schedule",  # 給 Airflow 定時觸發的派工任務
+        "crawler.tasks_line",  # 每天用 LINE 推播最新一則 165 案例
+        "crawler.tasks_schedule",  # 定時觸發的派工任務
     ],
     # broker: 指定訊息中介的連線網址, Celery 會把任務送到這裡排隊
     # 格式: pyamqp://帳號:密碼@主機:埠號/

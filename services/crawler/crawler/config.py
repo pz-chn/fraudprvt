@@ -13,3 +13,6 @@ MYSQL_PORT = int(os.environ["MYSQL_PORT"])
 MYSQL_ACCOUNT = os.environ["MYSQL_ACCOUNT"]
 MYSQL_PASSWORD = os.environ["MYSQL_PASSWORD"]
 MYSQL_DATABASE = os.environ["MYSQL_DATABASE"]
+
+# LINE 推播 (tasks_line.py) 用; 沒設定時只有推播任務會失敗, 爬蟲照常執行
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")

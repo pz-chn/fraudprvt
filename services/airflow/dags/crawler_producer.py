@@ -90,3 +90,21 @@ with DAG(
         python_callable=send_crawler_task,
         op_kwargs={"task_name": "crawler.tasks_schedule.crawl_tfc_recent", "args": [3]},
     )
+
+
+# 19:00 用 LINE 推播最新一則 165 案例給所有好友
+# 165 週六日不更新、平日也可能沒有新案例; 由 crawler_worker 比對發送紀錄, 挑還沒發過的最新一則
+with DAG(
+    dag_id="line_push_daily_case",
+    schedule="0 19 * * *",
+    start_date=pendulum.datetime(2026, 10, 1, tz=TAIPEI_TZ),
+    catchup=False,
+    max_active_runs=1,
+    default_args=default_args,
+    tags=["line"],
+):
+    PythonOperator(
+        task_id="send_push_daily_case",
+        python_callable=send_crawler_task,
+        op_kwargs={"task_name": "crawler.tasks_line.push_daily_case"},
+    )

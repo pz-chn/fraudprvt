@@ -64,7 +64,7 @@ def fraud_prvt(
     dscp: str = "",  # 查詢字串（可透過 URL query string 傳入）
 ):
     # 分類儲存在 article_categories，用 group_concat 併回原本的逗號字串格式
-    sql = text("""
+    mygopen_sql = text("""
     select
         a.id,
         a.title,
@@ -78,44 +78,90 @@ def fraud_prvt(
     where a.title like :kw or a.content_text like :kw
     group by a.id
     """)
+    # TFC 的主鍵是 source_id，多一個最後修改時間 modified，分類在 tfc_article_categories
+    tfc_sql = text("""
+    select
+        a.source_id,
+        a.title,
+        a.verdict,
+        a.published,
+        a.modified,
+        a.url,
+        a.content_text,
+        group_concat(c.category order by c.category separator ', ') as categories
+    from tfc_articles a
+    left join tfc_article_categories c on c.article_id = a.source_id
+    where a.title like :kw or a.content_text like :kw
+    group by a.source_id
+    """)
+    params = {"kw": f"%{dscp}%"}
     # 建立資料庫連線，離開 with 區塊時自動關閉（中途出錯也會關）
     with get_mysql_fraudprvtdata_conn() as mysql_conn:
         # 使用 Pandas 執行 SQL 查詢並取得資料
         # pd.read_sql 把查詢結果包成 DataFrame，省下手動 cursor.fetchall + 轉欄位
-        data_df = pd.read_sql(sql, con=mysql_conn, params={"kw": f"%{dscp}%"})
+        mygopen_df = pd.read_sql(mygopen_sql, con=mysql_conn, params=params)
+        tfc_df = pd.read_sql(tfc_sql, con=mysql_conn, params=params)
     # 將 DataFrame 轉為 List of Dict 格式，方便 FastAPI 回傳 JSON
-    # records 模式會產出 [{欄位:值, ...}, {欄位:值, ...}] 這種前端最愛吃的結構
-    data_dict = data_df.to_dict("records")
-    return {"data": data_dict}  # 回傳資料結果（FastAPI 自動序列化成 JSON）
+    # records 模式會產出 [{欄位:值, ...}, {欄位:值, ...}]
+    # 兩個來源欄位不同，分成兩個 list 回傳
+    return {  # 回傳資料結果（FastAPI 自動序列化成 JSON）
+        "data": {
+            "mygopen": mygopen_df.to_dict("records"),
+            "tfc": tfc_df.to_dict("records"),
+        }
+    }
 
 
-def search_articles(keyword: str, limit: int = 5):
-    # 用 :kw 這種參數寫法，% 放在參數值裡，不會再被格式化一次
-    sql = text("""
-        select title, published, url from mygopen_articles
+# LINE 查詢的來源：(顯示名稱, SQL)，回覆時照這個順序排列
+# 資料表名稱不能用 :參數 帶入，所以每個來源各寫一段固定的 SQL
+# 用 :kw 這種參數寫法，% 放在參數值裡，不會再被格式化一次
+SEARCH_SOURCES = [
+    ("MyGoPen：", text("""
+        -- MyGoPen 沒有最後修改時間，補一個空值欄位，讓兩個來源的欄位一樣
+        select title, published, null as modified, url from mygopen_articles
         where title like :kw or content_text like :kw
         order by published desc
         limit :limit
-    """)
+    """)),
+    ("台灣事實查核中心：", text("""
+        select title, published, modified, url from tfc_articles
+        where title like :kw or content_text like :kw
+        -- 有最後修改時間就用修改時間，沒有就用發布時間，兩種混在一起排序
+        order by coalesce(modified, published) desc
+        limit :limit
+    """)),
+]
+
+
+# 回傳 [(來源名稱, 這個來源最新的 limit 篇), ...]，沒找到的來源是空 list
+def search_articles(keyword: str, limit: int = 2):
+    params = {"kw": f"%{keyword}%", "limit": limit}
     mysql_conn = get_mysql_fraudprvtdata_conn()
     try: # 如果try那邊error 最後會被 FastAPI 接住，回傳 500（伺服器錯誤）給 LINE
-        rows = mysql_conn.execute(
-            sql, {"kw": f"%{keyword}%", "limit": limit}
-        ).fetchall() # 把結果全部拿回來，變成一個 list，每個元素是一列（Row 物件）
+        results = [
+            (name, mysql_conn.execute(sql, params).fetchall()) # 把結果全部拿回來，變成一個 list，每個元素是一列（Row 物件）
+            for name, sql in SEARCH_SOURCES
+        ] # 兩個來源共用同一條連線，依序各查一次
     finally: # 不管 try 有沒有出錯，都一定會執行
         mysql_conn.close()
-    return rows
+    return results
 
 
 def build_reply(keyword: str) -> str:
-    rows = search_articles(keyword)
-    if not rows:
-        return f"找不到和「{keyword}」相關的文章"
-    items = []
-    for i, r in enumerate(rows, 1):
-        items.append(f"{i}. {r.title or '（無標題）'}\n發布時間：{r.published}\n{r.url}")
-    header = f"找到和「{keyword}」相關的文章（最新 {len(rows)} 篇）："
-    return (header + "\n\n" + "\n\n".join(items))[:4900]
+    sections = []
+    for name, rows in search_articles(keyword):
+        if not rows:
+            sections.append(f"來自 {name}\n找不到和「{keyword}」相關的文章")
+            continue
+        items = []
+        for i, r in enumerate(rows, 1):
+            item = f"{i}. {r.title or '（無標題）'}\n發布時間：{r.published}"
+            if r.modified and r.modified != r.published:  # 有最後修改時間、且跟發布時間不同才多顯示一行
+                item += f"\n最後修改：{r.modified}"
+            items.append(item + f"\n{r.url}")
+        header = f"來自 {name}\n找到和「{keyword}」相關的文章（最新 {len(rows)} 篇）："
+        sections.append(header + "\n\n" + "\n\n".join(items))
+    return "\n\n".join(sections)[:4900]
 
 
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)

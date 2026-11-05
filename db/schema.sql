@@ -51,6 +51,21 @@ CREATE TABLE `fraud_cases` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `line_case_pushes`
+--
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `line_case_pushes` (
+  `case_id` bigint unsigned NOT NULL,
+  `case_date` date NOT NULL,
+  `pushed_at` datetime NOT NULL,
+  PRIMARY KEY (`case_id`),
+  KEY `idx_case_date` (`case_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `mygopen_articles`
 --
 
