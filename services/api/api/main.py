@@ -1,10 +1,13 @@
 # 匯入相關套件
+import logging  # 印出 log 用
+
 import pandas as pd  # 用來處理資料表，把 SQL 查詢結果轉成 DataFrame
 from fastapi import FastAPI, HTTPException, Request  # 加了 HTTPException回傳error給對方, Request讀進來的請求
 from linebot.v3 import WebhookParser # 拆解line送來的資料
 from linebot.v3.exceptions import InvalidSignatureError # 簽章驗證失敗時的error
 from linebot.v3.messaging import ( # 回復訊息用的工具們
     ApiClient,
+    ApiException, # LINE 拒絕請求時的 error
     Configuration,
     MessagingApi,
     ReplyMessageRequest,
@@ -164,6 +167,9 @@ def build_reply(keyword: str) -> str:
     return "\n\n".join(sections)[:4900]
 
 
+# 用 uvicorn 的 logger，訊息會跟其他 uvicorn log 一起出現在 docker service logs
+logger = logging.getLogger("uvicorn.error")
+
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 line_parser = WebhookParser(LINE_CHANNEL_SECRET)
 
@@ -184,10 +190,19 @@ async def callback(request: Request): #非同步函式 可以先理解成「這�
             if isinstance(event, MessageEvent) and isinstance(
                 event.message, TextMessageContent
             ):
-                line_api.reply_message(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token, #跟著每個使用者原文來的
-                        messages=[TextMessage(text=build_reply(event.message.text.strip()))], #把使用者傳的原文去掉前後空白(strip) 從mysql組出回復內容 包成一則文字訊息 放進list
-                    ) #把回給誰和回什麼內容包在一起
-                ) #傳送給line
+                # LINE 重送的事件 reply_token 已失效，回覆一定會 400，直接略過
+                if event.delivery_context and event.delivery_context.is_redelivery:
+                    logger.info("略過 LINE 重送的事件")
+                    continue
+                try:
+                    line_api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token, #跟著每個使用者原文來的
+                            messages=[TextMessage(text=build_reply(event.message.text.strip()))], #把使用者傳的原文去掉前後空白(strip) 從mysql組出回復內容 包成一則文字訊息 放進list
+                        ) #把回給誰和回什麼內容包在一起
+                    ) #傳送給line
+                except ApiException as exc:
+                    # LINE 拒絕這次回覆 (例如 reply_token 過期)：只記 log，不回 500，
+                    # 否則 LINE 會當成送達失敗，每分鐘重送同一則
+                    logger.warning(f"LINE 回覆失敗 ({exc.status}): {exc.body}")
     return "OK" #回給line說ok(http200之意)
