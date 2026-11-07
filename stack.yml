@@ -1,5 +1,8 @@
 version: "3.8"
 # restart_policy: 常駐服務用 any, Docker 正常重啟後也會自動回來; 一次性任務才用 on-failure
+# placement: 每個服務只會放到「有同名標籤」的節點上, 例如 mysql 要放在有 mysql=true 標籤的節點
+#   節點加標籤 (在 manager 執行): docker node update --label-add mysql=true <節點名稱>
+#   要搬服務時只改節點的標籤, 不用改這個檔案
 services:
   api:
     image: kikurage3133/fraudprvt_api:0.1.1
@@ -17,6 +20,21 @@ services:
       LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.api == true]
+      restart_policy:
+        condition: any
+  # 把 ngrok 固定網域收到的請求轉給 api (LINE webhook 用), 不開 ports
+  # NGROK_AUTHTOKEN、NGROK_URL 來自 .env.ngrok; 同一個網域同時只能有一個 ngrok 在跑
+  ngrok:
+    image: ngrok/ngrok:3
+    command: ["http", "api:8888", "--url=${NGROK_URL}", "--log=stdout"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.ngrok == true]
       restart_policy:
         condition: any
   mysql:
@@ -38,6 +56,8 @@ services:
       - ./db/init-users.sh:/docker-entrypoint-initdb.d/02_init-users.sh:ro
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.mysql == true]
       restart_policy:
         condition: any
   # rabbitmq 只給 stack 內部的 crawler 用 (服務名稱 rabbitmq:5672)。
@@ -53,6 +73,8 @@ services:
       RABBITMQ_DEFAULT_PASS: ${WORKER_PASSWORD}
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.rabbitmq == true]
       restart_policy:
         condition: any
   crawler_worker:
@@ -71,6 +93,8 @@ services:
       LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.crawler_worker == true]
       restart_policy:
         condition: any
   # ---------------------------------------------------------------
@@ -88,6 +112,8 @@ services:
     image: redis:7
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.airflow-redis == true]
       restart_policy:
         condition: any
 
@@ -120,6 +146,8 @@ services:
       AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.airflow_init == true]
       # MySQL 可能還沒就緒, 失敗就隔 15 秒重試, 最多 10 次; 成功結束 (exit 0) 就不再重啟
       restart_policy:
         condition: on-failure
@@ -143,6 +171,8 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.airflow_scheduler == true]
       restart_policy:
         condition: any
 
@@ -167,6 +197,8 @@ services:
       CRAWLER_BROKER_URL: pyamqp://${WORKER_ACCOUNT}:${WORKER_PASSWORD}@rabbitmq:5672/
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.airflow_worker == true]
       restart_policy:
         condition: any
 
@@ -189,6 +221,8 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.labels.airflow_webserver == true]
       restart_policy:
         condition: any
 volumes:

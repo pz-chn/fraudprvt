@@ -55,12 +55,15 @@ cd fraudprvt
 # 1. 設定環境變數（密碼請自行設定，勿使用任何範本或課堂提供的帳密）
 cp .env.stack.example .env.stack     # 依欄位填寫（包含 Airflow 管理員密碼，請用隨機字串）
 cp .env.line.example .env.line     # 填入 LINE 的 Channel secret 與 access token（不進 git）
+cp .env.ngrok.example .env.ngrok   # 填入 ngrok 的 authtoken 與固定網域（例如 https://xxx.ngrok-free.app）
 
 # 2. 部署
 #    image 由 Docker Hub 公開下載（kikurage3133/fraudprvt_api、fraudprvt_crawler、fraudprvt_airflow，
 #    支援 amd64 與 arm64），使用的版本標籤寫在 stack.yml 裡，不需要在本機 build。
 docker swarm init                    # 若尚未啟用 Swarm
-set -a; source .env.stack; source .env.line; set +a
+#    每個服務只會放到有同名標籤的節點上；只有一台時，全部標籤都加在自己身上
+docker node update $(for s in api ngrok mysql rabbitmq crawler_worker airflow-redis airflow_init airflow_scheduler airflow_worker airflow_webserver; do echo --label-add $s=true; done) $(docker node ls -q -f role=manager)
+set -a; source .env.stack; source .env.line; source .env.ngrok; set +a
 docker stack deploy -c stack.yml fraudprvt
 
 # 3. 資料表與資料庫帳號：全新環境不需手動處理
@@ -125,6 +128,7 @@ fraudprvt/
 ├── db/schema.sql             # 資料表結構
 ├── db/init-users.sh          # MySQL 首次初始化時建立專用帳號與 airflow 資料庫
 ├── .env.stack.example        # 部署用環境變數欄位（只有欄位名稱）
+├── .env.ngrok.example        # ngrok authtoken 與固定網域的欄位
 └── services/
     ├── airflow/              # Airflow（Dockerfile、dags/）
     ├── api/                  # FastAPI（Dockerfile、pyproject.toml、api/）
